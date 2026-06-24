@@ -50,10 +50,19 @@ export default function ScannerPage() {
     );
   }
 
+  // Build multi-target array from event_files, fall back to legacy single fields
+  const hasMultiFiles = event.files && event.files.length > 0;
+  const targets = hasMultiFiles
+    ? event.files.map((f) => ({ mindUrl: f.mind_url, videoUrl: f.video_url }))
+    : undefined;
+
   return (
     <ARScanner
-      mindUrl={event.mind_url}
-      videoUrl={event.video_url}
+      // Legacy fallback
+      mindUrl={!hasMultiFiles ? event.mind_url : undefined}
+      videoUrl={!hasMultiFiles ? event.video_url : undefined}
+      // Multi-target
+      targets={targets}
       eventTitle={event.title}
       onScanRecorded={recordScan}
     />

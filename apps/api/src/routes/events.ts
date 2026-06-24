@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { AuthRequest, requireAuth, supabase } from "../lib/supabase.js";
 import { generateSlug } from "../lib/slug.js";
+import { imagekit } from "../lib/imagekit.js";
 import type { CreateEventInput, UpdateEventInput } from "@gravity/shared";
 
 const router = Router();
@@ -62,7 +63,14 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  res.json({ data });
+  // Fetch associated event files
+  const { data: files } = await supabase
+    .from("event_files")
+    .select("*")
+    .eq("event_id", data.id)
+    .order("sort_order", { ascending: true });
+
+  res.json({ data: { ...data, files: files ?? [] } });
 });
 
 router.patch("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
@@ -90,6 +98,13 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 router.delete("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+  // Get event files to clean up ImageKit storage
+  const { data: eventFiles } = await supabase
+    .from("event_files")
+    .select("imagekit_photo_path, imagekit_video_path, imagekit_mind_path")
+    .eq("event_id", req.params.id);
+
+  // Delete event (cascades to event_files in DB)
   const { error } = await supabase
     .from("events")
     .delete()
@@ -99,6 +114,25 @@ router.delete("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   if (error) {
     res.status(500).json({ error: error.message });
     return;
+  }
+
+  // Clean up ImageKit files in background (best effort)
+  if (eventFiles) {
+    for (const ef of eventFiles) {
+      const paths = [
+        ef.imagekit_photo_path,
+        ef.imagekit_video_path,
+        ef.imagekit_mind_path,
+      ].filter(Boolean);
+      for (const p of paths) {
+        try {
+          const found = await imagekit.listFiles({ path: p as string });
+          for (const f of found) {
+            if ("fileId" in f) await imagekit.deleteFile(f.fileId);
+          }
+        } catch { /* best effort */ }
+      }
+    }
   }
 
   res.status(204).send();

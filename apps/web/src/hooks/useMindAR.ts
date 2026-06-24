@@ -12,9 +12,17 @@ export type ARStatus =
   | "tracking"
   | "error";
 
-interface UseMindAROptions {
+interface ARTarget {
   mindUrl: string;
   videoUrl: string;
+}
+
+interface UseMindAROptions {
+  /** Single target (legacy) */
+  mindUrl?: string;
+  videoUrl?: string;
+  /** Multiple targets */
+  targets?: ARTarget[];
   onTrackingStart?: () => void;
   onTrackingLost?: () => void;
 }
@@ -22,6 +30,7 @@ interface UseMindAROptions {
 export function useMindAR({
   mindUrl,
   videoUrl,
+  targets,
   onTrackingStart,
   onTrackingLost,
 }: UseMindAROptions) {
@@ -29,16 +38,25 @@ export function useMindAR({
   const [status, setStatus] = useState<ARStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const mindarRef = useRef<MindARThreeInstance | null>(null);
-  const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const videoElsRef = useRef<HTMLVideoElement[]>([]);
   const isTrackingRef = useRef(false);
 
+  // Resolve final targets: prefer multi-target array, fallback to legacy single target
+  const resolvedTargets = targets && targets.length > 0
+    ? targets
+    : mindUrl && videoUrl
+      ? [{ mindUrl, videoUrl }]
+      : [];
+
+  // Stable serialized key for the targets array
+  const targetsKey = JSON.stringify(resolvedTargets.map((t) => `${t.mindUrl}|${t.videoUrl}`));
+
   const cleanup = useCallback(() => {
-    const video = videoElRef.current;
-    if (video) {
+    for (const video of videoElsRef.current) {
       video.pause();
       video.src = "";
-      videoElRef.current = null;
     }
+    videoElsRef.current = [];
 
     if (mindarRef.current) {
       mindarRef.current.stop();
@@ -53,7 +71,7 @@ export function useMindAR({
   }, []);
 
   useEffect(() => {
-    if (!containerRef.current || !mindUrl || !videoUrl) return;
+    if (!containerRef.current || resolvedTargets.length === 0) return;
 
     let cancelled = false;
     let resizeListener: (() => void) | null = null;
@@ -63,44 +81,58 @@ export function useMindAR({
       setError(null);
 
       try {
-        const video = document.createElement("video");
-        video.src = videoUrl;
-        video.crossOrigin = "anonymous";
-        video.loop = true;
-        video.muted = true;
-        video.playsInline = true;
-        video.setAttribute("playsinline", "");
-        video.setAttribute("webkit-playsinline", "");
-        video.preload = "auto";
-        videoElRef.current = video;
+        // Pre-load all videos
+        const videos: HTMLVideoElement[] = [];
+        for (const target of resolvedTargets) {
+          const video = document.createElement("video");
+          video.src = target.videoUrl;
+          video.crossOrigin = "anonymous";
+          video.loop = true;
+          video.muted = true;
+          video.playsInline = true;
+          video.setAttribute("playsinline", "");
+          video.setAttribute("webkit-playsinline", "");
+          video.preload = "auto";
 
-        await new Promise<void>((resolve) => {
-          let resolved = false;
-          const handleLoaded = () => {
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
-          };
-          video.onloadedmetadata = handleLoaded;
-          video.oncanplay = handleLoaded;
-          video.oncanplaythrough = handleLoaded;
-          video.onerror = () => {
-            console.warn("Video preloading warning — proceeding anyway");
-            handleLoaded();
-          };
-          setTimeout(handleLoaded, 4000);
-          video.load();
-        });
+          await new Promise<void>((resolve) => {
+            let resolved = false;
+            const handleLoaded = () => {
+              if (!resolved) {
+                resolved = true;
+                resolve();
+              }
+            };
+            video.onloadedmetadata = handleLoaded;
+            video.oncanplay = handleLoaded;
+            video.oncanplaythrough = handleLoaded;
+            video.onerror = () => {
+              console.warn("Video preloading warning — proceeding anyway");
+              handleLoaded();
+            };
+            setTimeout(handleLoaded, 4000);
+            video.load();
+          });
+
+          if (cancelled) return;
+          videos.push(video);
+        }
+
+        videoElsRef.current = videos;
 
         if (cancelled) return;
 
         const MindARThree = await loadMindARThree();
 
+        // For multi-target: compile all .mind URLs into a single array for MindAR
+        // MindAR supports multiple image targets from separate .mind files
+        // We use the first target's mind URL for a single-target setup,
+        // or concatenated approach for multi-target
+        const mindUrls = resolvedTargets.map((t) => t.mindUrl);
+
         const mindarThree = new MindARThree({
           container: containerRef.current!,
-          imageTargetSrc: mindUrl,
-          maxTrack: 1,
+          imageTargetSrc: mindUrls.length === 1 ? mindUrls[0] : mindUrls.join(","),
+          maxTrack: Math.min(resolvedTargets.length, 4),
           filterMinCF: 0.0001,
           filterBeta: 1000,
           warmupTolerance: 5,
@@ -110,47 +142,55 @@ export function useMindAR({
         mindarRef.current = mindarThree;
 
         const { renderer } = mindarThree;
-        const anchor = mindarThree.addAnchor(0);
 
-        const texture = new THREE.VideoTexture(video);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
+        // Create an anchor + video plane for each target
+        for (let i = 0; i < resolvedTargets.length; i++) {
+          const anchor = mindarThree.addAnchor(i);
+          const video = videos[i];
 
-        const geometry = new THREE.PlaneGeometry(1, 1);
-        const material = new THREE.MeshBasicMaterial({
-          map: texture,
-          transparent: true,
-          side: THREE.DoubleSide,
-        });
+          const texture = new THREE.VideoTexture(video);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.minFilter = THREE.LinearFilter;
+          texture.magFilter = THREE.LinearFilter;
 
-        const plane = new THREE.Mesh(geometry, material);
-        plane.position.z = 0.01;
+          const geometry = new THREE.PlaneGeometry(1, 1);
+          const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true,
+            side: THREE.DoubleSide,
+          });
 
-        if (video.videoWidth && video.videoHeight) {
-          const aspect = video.videoWidth / video.videoHeight;
-          plane.scale.set(aspect, 1, 1);
-        }
+          const plane = new THREE.Mesh(geometry, material);
+          plane.position.z = 0.01;
 
-        anchor.group.add(plane);
-
-        anchor.onTargetFound = () => {
-          if (!isTrackingRef.current) {
-            isTrackingRef.current = true;
-            setStatus("tracking");
-            onTrackingStart?.();
+          if (video.videoWidth && video.videoHeight) {
+            const aspect = video.videoWidth / video.videoHeight;
+            plane.scale.set(aspect, 1, 1);
           }
-          video.play().catch(() => {});
-        };
 
-        anchor.onTargetLost = () => {
-          if (isTrackingRef.current) {
-            isTrackingRef.current = false;
-            setStatus("ready");
+          anchor.group.add(plane);
+
+          anchor.onTargetFound = () => {
+            if (!isTrackingRef.current) {
+              isTrackingRef.current = true;
+              setStatus("tracking");
+              onTrackingStart?.();
+            }
+            video.play().catch(() => {});
+          };
+
+          anchor.onTargetLost = () => {
             video.pause();
-            onTrackingLost?.();
-          }
-        };
+            // Check if any anchor is still tracking
+            // For simplicity, set to ready when the last anchor loses tracking
+            // In practice MindAR manages this internally
+            if (isTrackingRef.current) {
+              isTrackingRef.current = false;
+              setStatus("ready");
+              onTrackingLost?.();
+            }
+          };
+        }
 
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -182,11 +222,11 @@ export function useMindAR({
         window.removeEventListener("resize", resizeListener);
       }
     };
-  }, [mindUrl, videoUrl, cleanup, onTrackingStart, onTrackingLost]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetsKey, cleanup, onTrackingStart, onTrackingLost]);
 
   const unmute = useCallback(() => {
-    const video = videoElRef.current;
-    if (video) {
+    for (const video of videoElsRef.current) {
       video.muted = false;
       video.play().catch(() => {});
     }

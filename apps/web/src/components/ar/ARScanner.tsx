@@ -3,9 +3,17 @@ import { Camera, ScanLine, Volume2, VolumeX, AlertCircle } from "lucide-react";
 import { useMindAR } from "../../hooks/useMindAR";
 import { Button } from "../ui";
 
-interface ARScannerProps {
+interface ARTarget {
   mindUrl: string;
   videoUrl: string;
+}
+
+interface ARScannerProps {
+  /** Legacy single-target props */
+  mindUrl?: string;
+  videoUrl?: string;
+  /** Multi-target props */
+  targets?: ARTarget[];
   eventTitle: string;
   onScanRecorded?: () => void;
 }
@@ -13,6 +21,7 @@ interface ARScannerProps {
 export function ARScanner({
   mindUrl,
   videoUrl,
+  targets,
   eventTitle,
   onScanRecorded,
 }: ARScannerProps) {
@@ -29,6 +38,7 @@ export function ARScanner({
   const { containerRef, status, error, unmute } = useMindAR({
     mindUrl,
     videoUrl,
+    targets,
     onTrackingStart: handleTrackingStart,
   });
 
@@ -37,11 +47,13 @@ export function ARScanner({
       unmute();
       setMuted(false);
     } else {
-      const video = containerRef.current?.querySelector("video");
-      if (video) video.muted = true;
+      const videos = containerRef.current?.querySelectorAll("video");
+      videos?.forEach((v) => { v.muted = true; });
       setMuted(true);
     }
   };
+
+  const targetCount = targets?.length ?? (mindUrl ? 1 : 0);
 
   return (
     <div className="fixed inset-0 bg-black">
@@ -50,13 +62,20 @@ export function ARScanner({
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-0 inset-x-0 p-4 pt-safe bg-gradient-to-b from-black/70 to-transparent">
           <p className="text-center font-display text-lg text-white/90">{eventTitle}</p>
+          {targetCount > 1 && (
+            <p className="text-center text-white/50 text-xs mt-1">
+              {targetCount} photos to discover
+            </p>
+          )}
         </div>
 
         {status === "loading" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-gravity-950/80">
             <ScanLine className="w-12 h-12 text-gravity-400 animate-pulse mb-4" />
             <p className="text-white/80 text-sm">Preparing your experience...</p>
-            <p className="text-white/40 text-xs mt-2">Loading AR assets</p>
+            <p className="text-white/40 text-xs mt-2">
+              Loading {targetCount > 1 ? `${targetCount} AR targets` : "AR assets"}
+            </p>
           </div>
         )}
 

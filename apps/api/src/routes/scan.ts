@@ -21,7 +21,17 @@ router.get("/:slug", async (req, res: Response) => {
     return;
   }
 
-  if (!data.photo_url || !data.video_url || !data.mind_url) {
+  // Fetch multi-file entries
+  const { data: files } = await supabase
+    .from("event_files")
+    .select("*")
+    .eq("event_id", data.id)
+    .order("sort_order", { ascending: true });
+
+  const hasFiles = files && files.length > 0;
+  const hasLegacy = !!(data.photo_url && data.video_url && data.mind_url);
+
+  if (!hasFiles && !hasLegacy) {
     res.status(400).json({ error: "Event assets not ready" });
     return;
   }
@@ -30,9 +40,10 @@ router.get("/:slug", async (req, res: Response) => {
     id: data.id,
     title: data.title,
     slug: data.slug,
-    photo_url: data.photo_url,
-    video_url: data.video_url,
-    mind_url: data.mind_url,
+    photo_url: data.photo_url ?? "",
+    video_url: data.video_url ?? "",
+    mind_url: data.mind_url ?? "",
+    files: files ?? [],
   };
 
   res.json({ data: publicEvent });

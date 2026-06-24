@@ -5,6 +5,20 @@ export interface Profile {
   created_at: string;
 }
 
+export interface EventFile {
+  id: string;
+  event_id: string;
+  label: string | null;
+  photo_url: string;
+  video_url: string;
+  mind_url: string;
+  imagekit_photo_path: string | null;
+  imagekit_video_path: string | null;
+  imagekit_mind_path: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface Event {
   id: string;
   user_id: string;
@@ -18,15 +32,20 @@ export interface Event {
   is_published: boolean;
   created_at: string;
   updated_at: string;
+  files?: EventFile[];
 }
 
 export interface PublicEvent {
   id: string;
   title: string;
   slug: string;
+  /** @deprecated Use files[] instead */
   photo_url: string;
+  /** @deprecated Use files[] instead */
   video_url: string;
+  /** @deprecated Use files[] instead */
   mind_url: string;
+  files: EventFile[];
 }
 
 export interface CreateEventInput {
