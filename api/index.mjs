@@ -1,18 +1,14 @@
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+// Vercel Serverless Function Entry Point
+// Imports from the pre-compiled API dist (built by `npm run build`)
 
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 
-import eventsRouter from "../apps/api/src/routes/events";
-import scanRouter from "../apps/api/src/routes/scan";
-import uploadsRouter from "../apps/api/src/routes/uploads";
-import analyticsRouter from "../apps/api/src/routes/analytics";
+import eventsRouter from "../apps/api/dist/routes/events.js";
+import scanRouter from "../apps/api/dist/routes/scan.js";
+import uploadsRouter from "../apps/api/dist/routes/uploads.js";
+import analyticsRouter from "../apps/api/dist/routes/analytics.js";
 
 const app = express();
 
