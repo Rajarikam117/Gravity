@@ -40,6 +40,7 @@ export function useMindAR({
   const mindarRef = useRef<MindARThreeInstance | null>(null);
   const videoElsRef = useRef<HTMLVideoElement[]>([]);
   const isTrackingRef = useRef(false);
+  const rafRef = useRef<number>(0);
 
   // Resolve final targets: prefer multi-target array, fallback to legacy single target
   const resolvedTargets = targets && targets.length > 0
@@ -52,6 +53,11 @@ export function useMindAR({
   const targetsKey = JSON.stringify(resolvedTargets.map((t) => `${t.mindUrl}|${t.videoUrl}`));
 
   const cleanup = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    }
+
     for (const video of videoElsRef.current) {
       video.pause();
       video.src = "";
@@ -143,6 +149,8 @@ export function useMindAR({
 
         const { renderer } = mindarThree;
 
+        const { scene, camera } = mindarThree;
+
         // Create an anchor + video plane for each target
         for (let i = 0; i < resolvedTargets.length; i++) {
           const anchor = mindarThree.addAnchor(i);
@@ -163,10 +171,16 @@ export function useMindAR({
           const plane = new THREE.Mesh(geometry, material);
           plane.position.z = 0.01;
 
-          if (video.videoWidth && video.videoHeight) {
-            const aspect = video.videoWidth / video.videoHeight;
-            plane.scale.set(aspect, 1, 1);
-          }
+          // Set aspect ratio now if available, otherwise update when ready
+          const updateAspect = () => {
+            if (video.videoWidth && video.videoHeight) {
+              const aspect = video.videoWidth / video.videoHeight;
+              plane.scale.set(aspect, 1, 1);
+            }
+          };
+          updateAspect();
+          video.addEventListener("loadeddata", updateAspect);
+          video.addEventListener("playing", updateAspect);
 
           anchor.group.add(plane);
 
@@ -198,6 +212,14 @@ export function useMindAR({
         if (cancelled) return;
 
         setStatus("ready");
+
+        // Start the render loop — without this, VideoTexture frames are never
+        // drawn to the WebGL canvas (audio plays but nothing is visible).
+        const renderLoop = () => {
+          renderer.render(scene, camera);
+          rafRef.current = requestAnimationFrame(renderLoop);
+        };
+        rafRef.current = requestAnimationFrame(renderLoop);
 
         resizeListener = () => {
           renderer.setSize(window.innerWidth, window.innerHeight);
