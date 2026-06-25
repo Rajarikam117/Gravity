@@ -253,6 +253,51 @@ export function useMindAR({
         await mindarThree.start();
         if (cancelled) return;
 
+        // ── Force MindAR's internal elements to cover the viewport ──
+        // MindAR sets inline styles with the camera's native aspect ratio
+        // (often 4:3) which leaves black bars on portrait phones.
+        // We override these to get edge-to-edge camera coverage.
+        const forceFullscreen = () => {
+          const container = containerRef.current;
+          if (!container) return;
+
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+
+          // Force MindAR's camera video to cover the viewport
+          const cameraVideo = container.querySelector("video") as HTMLVideoElement | null;
+          if (cameraVideo) {
+            cameraVideo.style.cssText = `
+              position: fixed !important;
+              top: 0 !important;
+              left: 0 !important;
+              width: ${w}px !important;
+              height: ${h}px !important;
+              object-fit: cover !important;
+              z-index: 0 !important;
+            `;
+          }
+
+          // Force MindAR's WebGL canvas to match
+          const canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
+          if (canvas) {
+            canvas.style.cssText = `
+              position: fixed !important;
+              top: 0 !important;
+              left: 0 !important;
+              width: ${w}px !important;
+              height: ${h}px !important;
+              z-index: 1 !important;
+            `;
+          }
+
+          // Update Three.js renderer to match viewport
+          renderer.setSize(w, h);
+        };
+
+        // Apply immediately and on every resize
+        forceFullscreen();
+
         setStatus("ready");
 
         // ── Render loop ──────────────────────────────────────────
@@ -283,12 +328,12 @@ export function useMindAR({
 
         // ── Resize handling ──────────────────────────────────────
         resizeListener = () => {
-          renderer.setSize(window.innerWidth, window.innerHeight);
+          // Small delay to let the browser finish layout (URL bar animation)
+          setTimeout(forceFullscreen, 50);
         };
         window.addEventListener("resize", resizeListener);
         // Also handle orientation change (some older mobile browsers)
         window.addEventListener("orientationchange", resizeListener);
-        resizeListener();
 
         // ── Visibility change (app backgrounded) ─────────────────
         // Pause everything when user switches tabs or locks phone to

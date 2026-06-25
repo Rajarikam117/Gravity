@@ -94,11 +94,11 @@ export function ARScanner({
 
   return (
     <div className="ar-container">
-      {/* WebGL / camera container */}
-      <div ref={containerRef} className="absolute inset-0" />
+      {/* MindAR mounts its video + canvas here */}
+      <div ref={containerRef} className="absolute inset-0" style={{ zIndex: 0 }} />
 
-      {/* UI overlay — pointer-events-none so touches pass to camera */}
-      <div className="absolute inset-0 pointer-events-none">
+      {/* UI overlay — sits above MindAR's canvas (z-index:1) */}
+      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
 
         {/* ─── Top bar: back button + title ─────────────────────── */}
         <div className="absolute top-0 inset-x-0 px-4 pt-safe bg-gradient-to-b from-black/70 to-transparent"
