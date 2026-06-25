@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
+import { uploadToImageKit } from "../lib/imagekitUpload";
 import {
   compileMindFile,
   validatePhotoFile,
@@ -22,6 +23,7 @@ import type { Event, EventFile } from "@gravity/shared";
 import { Button, Card, Input } from "../components/ui";
 
 type UploadStep = "idle" | "compiling" | "uploading" | "done" | "error";
+type UploadSubStep = "photo" | "video" | "mind" | "registering" | null;
 
 export default function EventDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -37,7 +39,9 @@ export default function EventDetailPage() {
   const [newVideoFile, setNewVideoFile] = useState<File | null>(null);
   const [newLabel, setNewLabel] = useState("");
   const [uploadStep, setUploadStep] = useState<UploadStep>("idle");
+  const [uploadSubStep, setUploadSubStep] = useState<UploadSubStep>(null);
   const [compileProgress, setCompileProgress] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
   const scanUrl = event
@@ -65,7 +69,7 @@ export default function EventDetailPage() {
     fetchEvent();
   }, [fetchEvent]);
 
-  // ─── Add new file pair ───────────────────────────────────────
+  // ─── Add new file pair (client-side upload to ImageKit) ─────
   const handleAddFile = async () => {
     if (!newPhotoFile || !newVideoFile || !session?.access_token || !id) return;
 
@@ -78,26 +82,71 @@ export default function EventDetailPage() {
 
     setError("");
     setUploadStep("compiling");
+    setCompileProgress(0);
+    setUploadProgress(0);
 
     try {
+      // Step 1: Compile the .mind file on the client
       const mindBlob = await compileMindFile(newPhotoFile, setCompileProgress);
       const mindFile = new File([mindBlob], "target.mind", {
         type: "application/octet-stream",
       });
 
+      const folder = `/gravity/events/${id}/files`;
+      const timestamp = Date.now();
+
+      // Step 2: Upload all three files directly to ImageKit from the browser
       setUploadStep("uploading");
 
-      const formData = new FormData();
-      formData.append("photo", newPhotoFile);
-      formData.append("video", newVideoFile);
-      formData.append("mind", mindFile);
-      if (newLabel.trim()) {
-        formData.append("label", newLabel.trim());
-      }
+      setUploadSubStep("photo");
+      setUploadProgress(0);
+      const photoResult = await uploadToImageKit(
+        newPhotoFile,
+        `photo_${timestamp}.jpg`,
+        folder,
+        session.access_token,
+        setUploadProgress
+      );
 
+      setUploadSubStep("video");
+      setUploadProgress(0);
+      const videoResult = await uploadToImageKit(
+        newVideoFile,
+        `video_${timestamp}.mp4`,
+        folder,
+        session.access_token,
+        setUploadProgress
+      );
+
+      setUploadSubStep("mind");
+      setUploadProgress(0);
+      const mindResult = await uploadToImageKit(
+        mindFile,
+        `target_${timestamp}.mind`,
+        folder,
+        session.access_token,
+        setUploadProgress
+      );
+
+      // Step 3: Register the uploaded file URLs in the database
+      setUploadSubStep("registering");
       const res = await apiFetch<{ data: EventFile }>(
-        `/api/uploads/${id}/files`,
-        { method: "POST", body: formData },
+        `/api/uploads/${id}/files/register`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            photo_url: photoResult.url,
+            video_url: videoResult.url,
+            mind_url: mindResult.url,
+            imagekit_photo_file_id: photoResult.fileId,
+            imagekit_video_file_id: videoResult.fileId,
+            imagekit_mind_file_id: mindResult.fileId,
+            imagekit_photo_path: photoResult.filePath,
+            imagekit_video_path: videoResult.filePath,
+            imagekit_mind_path: mindResult.filePath,
+            label: newLabel.trim() || null,
+          }),
+        },
         session.access_token
       );
 
@@ -108,6 +157,7 @@ export default function EventDetailPage() {
           : prev
       );
       setUploadStep("done");
+      setUploadSubStep(null);
       setNewPhotoFile(null);
       setNewVideoFile(null);
       setNewLabel("");
@@ -118,6 +168,7 @@ export default function EventDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setUploadStep("error");
+      setUploadSubStep(null);
     }
   };
 
@@ -447,7 +498,22 @@ export default function EventDetailPage() {
               )}
 
               {uploadStep === "uploading" && (
-                <p className="text-sm text-white/70">Uploading to ImageKit...</p>
+                <div>
+                  <p className="text-sm text-white/70 mb-2">
+                    {uploadSubStep === "photo" && `Uploading photo... ${uploadProgress}%`}
+                    {uploadSubStep === "video" && `Uploading video... ${uploadProgress}%`}
+                    {uploadSubStep === "mind" && `Uploading AR target... ${uploadProgress}%`}
+                    {uploadSubStep === "registering" && "Saving..."}
+                  </p>
+                  {uploadSubStep !== "registering" && (
+                    <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gravity-500 transition-all duration-300"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
 
               {uploadStep === "done" && (

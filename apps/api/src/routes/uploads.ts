@@ -2,7 +2,7 @@ import { Router, Response } from "express";
 import multer from "multer";
 import path from "path";
 import { AuthRequest, requireAuth, supabase } from "../lib/supabase.js";
-import { uploadBuffer, imagekit } from "../lib/imagekit.js";
+import { uploadBuffer, imagekit, getUploadAuthParams } from "../lib/imagekit.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -10,6 +10,114 @@ const upload = multer({
 });
 
 const router = Router();
+
+// ─── ImageKit auth for client-side uploads ──────────────────────────────────
+// Returns a token, signature, and expire timestamp that the browser uses
+// to upload files directly to ImageKit (bypassing the 4.5MB Vercel limit).
+router.get(
+  "/auth",
+  requireAuth,
+  (_req: AuthRequest, res: Response) => {
+    try {
+      const authParams = getUploadAuthParams();
+      res.json(authParams);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate auth";
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+// ─── Register files uploaded from the browser ───────────────────────────────
+// The browser uploads photo, video, and mind directly to ImageKit,
+// then sends the resulting URLs here so we can create the DB record.
+router.post(
+  "/:eventId/files/register",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const eventId = req.params.eventId;
+    const {
+      photo_url,
+      video_url,
+      mind_url,
+      imagekit_photo_file_id,
+      imagekit_video_file_id,
+      imagekit_mind_file_id,
+      imagekit_photo_path,
+      imagekit_video_path,
+      imagekit_mind_path,
+      label,
+    } = req.body;
+
+    if (!photo_url || !video_url || !mind_url) {
+      res.status(400).json({ error: "photo_url, video_url, and mind_url are required" });
+      return;
+    }
+
+    // Verify event ownership
+    const { data: event, error: fetchError } = await supabase
+      .from("events")
+      .select("id, user_id")
+      .eq("id", eventId)
+      .eq("user_id", req.user!.id)
+      .single();
+
+    if (fetchError || !event) {
+      res.status(404).json({ error: "Event not found" });
+      return;
+    }
+
+    // Check file count limit (max 20 per event)
+    const { count } = await supabase
+      .from("event_files")
+      .select("id", { count: "exact", head: true })
+      .eq("event_id", eventId);
+
+    if ((count ?? 0) >= 20) {
+      res.status(400).json({ error: "Maximum 20 files per event reached" });
+      return;
+    }
+
+    try {
+      // Get next sort order
+      const { data: maxOrder } = await supabase
+        .from("event_files")
+        .select("sort_order")
+        .eq("event_id", eventId)
+        .order("sort_order", { ascending: false })
+        .limit(1)
+        .single();
+
+      const nextOrder = (maxOrder?.sort_order ?? -1) + 1;
+
+      // Insert event_files row
+      const { data: eventFile, error: insertError } = await supabase
+        .from("event_files")
+        .insert({
+          event_id: eventId,
+          label: label?.trim() || null,
+          photo_url,
+          video_url,
+          mind_url,
+          imagekit_photo_path: imagekit_photo_path || null,
+          imagekit_video_path: imagekit_video_path || null,
+          imagekit_mind_path: imagekit_mind_path || null,
+          sort_order: nextOrder,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      res.status(201).json({ data: eventFile });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Registration failed";
+      res.status(500).json({ error: message });
+    }
+  }
+);
 
 // ─── Legacy single-file upload (backward compat) ───────────────────────────
 router.post(
@@ -124,7 +232,7 @@ router.post(
   }
 );
 
-// ─── Multi-file upload: add a photo+video pair to an event ─────────────────
+// ─── Multi-file upload via server (kept for local dev, limited to ~4MB on Vercel) ──
 router.post(
   "/:eventId/files",
   requireAuth,
@@ -319,4 +427,3 @@ router.delete(
 );
 
 export default router;
-

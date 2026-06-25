@@ -37,3 +37,10 @@ export async function uploadBuffer(
     responseFields: "url,filePath,fileId",
   });
 }
+
+/** Generate auth parameters for client-side (browser) uploads to ImageKit.
+ *  This is needed because Vercel serverless functions have a ~4.5MB body limit,
+ *  so large files (videos, photos) must be uploaded directly from the browser. */
+export function getUploadAuthParams() {
+  return imagekit.getAuthenticationParameters();
+}
